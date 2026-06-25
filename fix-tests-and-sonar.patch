@@ -1,0 +1,392 @@
+diff --git a/.github/workflows/build.yml b/.github/workflows/build.yml
+index a9d299b..13d7ed0 100644
+--- a/.github/workflows/build.yml
++++ b/.github/workflows/build.yml
+@@ -14,6 +14,17 @@ jobs:
+       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+         with:
+           fetch-depth: 0 # Shallow clones should be disabled for a better relevancy of analysis
++
++      - uses: actions/setup-node@v4
++        with:
++          node-version: 20
++
++      - name: Install dependencies
++        run: npm ci
++
++      - name: Run unit tests with coverage
++        run: npm run test:coverage
++
+       - uses: SonarSource/sonarqube-scan-action@fd88b7d7ccbaefd23d8f36f73b59db7a3d246602 # v6.0.0
+         env:
+           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+diff --git a/sonar-project.properties b/sonar-project.properties
+index 34b6ac0..1f40e76 100644
+--- a/sonar-project.properties
++++ b/sonar-project.properties
+@@ -1 +1,15 @@
+-sonar.projectKey=milena-cicd-backend-project
+\ No newline at end of file
++sonar.projectKey=milena-cicd-backend-project
++
++# Source code
++sonar.sources=src
++sonar.tests=src/__tests__
++sonar.exclusions=src/__tests__/**,**/*.config.ts
++
++# TypeScript / coverage
++sonar.javascript.lcov.reportPaths=coverage/lcov.info
++sonar.coverage.exclusions=src/server.ts,src/lib/prisma.ts,src/__tests__/**,**/*.config.ts
++
++# Test execution report (junit)
++sonar.testExecutionReportPaths=reports/junit.xml
++
++sonar.sourceEncoding=UTF-8
+diff --git a/src/__tests__/unit/app.routes.test.ts b/src/__tests__/unit/app.routes.test.ts
+new file mode 100644
+index 0000000..ebcb566
+--- /dev/null
++++ b/src/__tests__/unit/app.routes.test.ts
+@@ -0,0 +1,92 @@
++import { describe, it, expect, vi, beforeEach } from "vitest";
++import request from "supertest";
++import type { Task } from "@prisma/client";
++
++// Mock the service module so the real Express app/routes can be exercised
++// end-to-end (HTTP -> routes -> controller) without touching the database.
++vi.mock("../../services/task.service.js", () => ({
++  findAll: vi.fn(),
++  findById: vi.fn(),
++  create: vi.fn(),
++  update: vi.fn(),
++  remove: vi.fn(),
++}));
++
++import * as taskService from "../../services/task.service.js";
++import app from "../../app.js";
++
++const mockService = vi.mocked(taskService);
++
++const mockTask: Task = {
++  id: 1,
++  title: "Test Task",
++  description: "Test description",
++  completed: false,
++  createdAt: new Date("2026-01-01T00:00:00.000Z"),
++  updatedAt: new Date("2026-01-01T00:00:00.000Z"),
++};
++
++describe("App & routes wiring", () => {
++  beforeEach(() => {
++    vi.clearAllMocks();
++  });
++
++  it("GET /api/tasks returns the list of tasks", async () => {
++    mockService.findAll.mockResolvedValue([mockTask]);
++
++    const res = await request(app).get("/api/tasks");
++
++    expect(res.status).toBe(200);
++    expect(res.body).toHaveLength(1);
++  });
++
++  it("GET /api/tasks/:id returns a single task", async () => {
++    mockService.findById.mockResolvedValue(mockTask);
++
++    const res = await request(app).get("/api/tasks/1");
++
++    expect(res.status).toBe(200);
++    expect(res.body.id).toBe(1);
++  });
++
++  it("POST /api/tasks creates a task using JSON body parsing", async () => {
++    mockService.create.mockResolvedValue(mockTask);
++
++    const res = await request(app)
++      .post("/api/tasks")
++      .send({ title: "New Task" });
++
++    expect(res.status).toBe(201);
++    expect(mockService.create).toHaveBeenCalledWith({
++      title: "New Task",
++      description: undefined,
++    });
++  });
++
++  it("PUT /api/tasks/:id updates a task", async () => {
++    mockService.update.mockResolvedValue({ ...mockTask, title: "Updated" });
++
++    const res = await request(app)
++      .put("/api/tasks/1")
++      .send({ title: "Updated" });
++
++    expect(res.status).toBe(200);
++    expect(res.body.title).toBe("Updated");
++  });
++
++  it("DELETE /api/tasks/:id removes a task", async () => {
++    mockService.remove.mockResolvedValue(mockTask);
++
++    const res = await request(app).delete("/api/tasks/1");
++
++    expect(res.status).toBe(204);
++  });
++
++  it("responds with CORS headers thanks to the cors middleware", async () => {
++    mockService.findAll.mockResolvedValue([]);
++
++    const res = await request(app).get("/api/tasks");
++
++    expect(res.headers["access-control-allow-origin"]).toBe("*");
++  });
++});
+diff --git a/src/__tests__/unit/task.controller.test.ts b/src/__tests__/unit/task.controller.test.ts
+index 5b6f3e2..2a42a40 100644
+--- a/src/__tests__/unit/task.controller.test.ts
++++ b/src/__tests__/unit/task.controller.test.ts
+@@ -60,6 +60,17 @@ describe("TaskController", () => {
+       expect(res.status).toHaveBeenCalledWith(200);
+       expect(res.json).toHaveBeenCalledWith(tasks);
+     });
++
++    it("should return 500 if the service throws", async () => {
++      mockService.findAll.mockRejectedValue(new Error("DB error"));
++      const req = createMockRequest();
++      const res = createMockResponse();
++
++      await taskController.getAllTasks(req, res);
++
++      expect(res.status).toHaveBeenCalledWith(500);
++      expect(res.json).toHaveBeenCalledWith({ error: "Failed to fetch tasks" });
++    });
+   });
+ 
+   describe("getTaskById", () => {
+@@ -86,6 +97,29 @@ describe("TaskController", () => {
+     expect(res.status).toHaveBeenCalledWith(404);
+     expect(res.json).toHaveBeenCalledWith({ error: "Task not found" });
+   });
++
++  it("should return 400 if the id is not a number", async () => {
++    const req = createMockRequest({ params: { id: "abc" } });
++    const res = createMockResponse();
++
++    await taskController.getTaskById(req, res);
++
++    expect(res.status).toHaveBeenCalledWith(400);
++    expect(res.json).toHaveBeenCalledWith({ error: "Invalid task ID" });
++    expect(mockService.findById).not.toHaveBeenCalled();
++  });
++
++  it("should return 500 if the service throws", async () => {
++    const req = createMockRequest({ params: { id: "1" } });
++    const res = createMockResponse();
++
++    mockService.findById.mockRejectedValue(new Error("DB error"));
++
++    await taskController.getTaskById(req, res);
++
++    expect(res.status).toHaveBeenCalledWith(500);
++    expect(res.json).toHaveBeenCalledWith({ error: "Failed to fetch task" });
++  });
+ });
+ 
+   describe("createTask", () => {
+@@ -102,6 +136,93 @@ describe("TaskController", () => {
+       expect(res.status).toHaveBeenCalledWith(201);
+       expect(res.json).toHaveBeenCalledWith(mockTask);
+     });
++
++    it("should return 400 if title is missing", async () => {
++      const req = createMockRequest({ body: { description: "No title" } });
++      const res = createMockResponse();
++
++      await taskController.createTask(req, res);
++
++      expect(res.status).toHaveBeenCalledWith(400);
++      expect(res.json).toHaveBeenCalledWith({
++        error: "Title is required and must be a non-empty string",
++      });
++      expect(mockService.create).not.toHaveBeenCalled();
++    });
++
++    it("should return 400 if title is an empty string", async () => {
++      const req = createMockRequest({ body: { title: "   " } });
++      const res = createMockResponse();
++
++      await taskController.createTask(req, res);
++
++      expect(res.status).toHaveBeenCalledWith(400);
++      expect(mockService.create).not.toHaveBeenCalled();
++    });
++
++    it("should return 500 if the service throws", async () => {
++      const req = createMockRequest({ body: { title: "New Task" } });
++      const res = createMockResponse();
++
++      mockService.create.mockRejectedValue(new Error("DB error"));
++
++      await taskController.createTask(req, res);
++
++      expect(res.status).toHaveBeenCalledWith(500);
++      expect(res.json).toHaveBeenCalledWith({ error: "Failed to create task" });
++    });
++  });
++
++  describe("updateTask", () => {
++    it("should return 200 with the updated task", async () => {
++      const req = createMockRequest({
++        params: { id: "1" },
++        body: { title: "Updated title" },
++      });
++      const res = createMockResponse();
++
++      mockService.update.mockResolvedValue({ ...mockTask, title: "Updated title" });
++
++      await taskController.updateTask(req, res);
++
++      expect(res.status).toHaveBeenCalledWith(200);
++      expect(res.json).toHaveBeenCalledWith({ ...mockTask, title: "Updated title" });
++    });
++
++    it("should return 400 if the id is not a number", async () => {
++      const req = createMockRequest({ params: { id: "abc" }, body: {} });
++      const res = createMockResponse();
++
++      await taskController.updateTask(req, res);
++
++      expect(res.status).toHaveBeenCalledWith(400);
++      expect(res.json).toHaveBeenCalledWith({ error: "Invalid task ID" });
++      expect(mockService.update).not.toHaveBeenCalled();
++    });
++
++    it("should return 404 if the task does not exist", async () => {
++      const req = createMockRequest({ params: { id: "999" }, body: {} });
++      const res = createMockResponse();
++
++      mockService.update.mockRejectedValue(new Error("Task not found"));
++
++      await taskController.updateTask(req, res);
++
++      expect(res.status).toHaveBeenCalledWith(404);
++      expect(res.json).toHaveBeenCalledWith({ error: "Task not found" });
++    });
++
++    it("should return 500 if the service throws an unexpected error", async () => {
++      const req = createMockRequest({ params: { id: "1" }, body: {} });
++      const res = createMockResponse();
++
++      mockService.update.mockRejectedValue(new Error("DB error"));
++
++      await taskController.updateTask(req, res);
++
++      expect(res.status).toHaveBeenCalledWith(500);
++      expect(res.json).toHaveBeenCalledWith({ error: "Failed to update task" });
++    });
+   });
+ 
+   describe("deleteTask", () => {
+@@ -116,5 +237,40 @@ describe("TaskController", () => {
+       expect(res.status).toHaveBeenCalledWith(204);
+       expect(res.send).toHaveBeenCalled();
+     });
++
++    it("should return 400 if the id is not a number", async () => {
++      const req = createMockRequest({ params: { id: "abc" } });
++      const res = createMockResponse();
++
++      await taskController.deleteTask(req, res);
++
++      expect(res.status).toHaveBeenCalledWith(400);
++      expect(res.json).toHaveBeenCalledWith({ error: "Invalid task ID" });
++      expect(mockService.remove).not.toHaveBeenCalled();
++    });
++
++    it("should return 404 if the task does not exist", async () => {
++      const req = createMockRequest({ params: { id: "999" } });
++      const res = createMockResponse();
++
++      mockService.remove.mockRejectedValue(new Error("Task not found"));
++
++      await taskController.deleteTask(req, res);
++
++      expect(res.status).toHaveBeenCalledWith(404);
++      expect(res.json).toHaveBeenCalledWith({ error: "Task not found" });
++    });
++
++    it("should return 500 if the service throws an unexpected error", async () => {
++      const req = createMockRequest({ params: { id: "1" } });
++      const res = createMockResponse();
++
++      mockService.remove.mockRejectedValue(new Error("DB error"));
++
++      await taskController.deleteTask(req, res);
++
++      expect(res.status).toHaveBeenCalledWith(500);
++      expect(res.json).toHaveBeenCalledWith({ error: "Failed to delete task" });
++    });
+   });
+ });
+diff --git a/src/__tests__/unit/task.service.test.ts b/src/__tests__/unit/task.service.test.ts
+index 5091104..85f9828 100644
+--- a/src/__tests__/unit/task.service.test.ts
++++ b/src/__tests__/unit/task.service.test.ts
+@@ -124,7 +124,37 @@ describe("TaskService", () => {
+         where: { id: 1 },
+       });
+     });
++
++    it("should throw an error when the task to delete does not exist", async () => {
++      (mockPrisma.task.findUnique as any).mockResolvedValue(null);
++
++      await expect(taskService.remove(999)).rejects.toThrow("Task not found");
++      expect(mockPrisma.task.delete).not.toHaveBeenCalled();
++    });
++  });
++
++  describe("update - not found", () => {
++    it("should throw an error when the task to update does not exist", async () => {
++      (mockPrisma.task.findUnique as any).mockResolvedValue(null);
++
++      await expect(
++        taskService.update(999, { title: "Doesn't matter" })
++      ).rejects.toThrow("Task not found");
++      expect(mockPrisma.task.update).not.toHaveBeenCalled();
++    });
++  });
++
++  describe("findById - not found", () => {
++    it("should return null when no task matches the given ID", async () => {
++      (mockPrisma.task.findUnique as any).mockResolvedValue(null);
++
++      const result = await taskService.findById(999);
++
++      expect(result).toBeNull();
++      expect(mockPrisma.task.findUnique).toHaveBeenCalledWith({
++        where: { id: 999 },
++      });
++    });
+   });
+-			
+ 
+ });
+diff --git a/vitest.config.ts b/vitest.config.ts
+index e92df4d..85f76c9 100644
+--- a/vitest.config.ts
++++ b/vitest.config.ts
+@@ -14,8 +14,15 @@ export default defineConfig({
+       exclude: [
+         "src/__tests__/**",
+         "src/server.ts",
++        "src/lib/prisma.ts",
+         "**/*.config.ts",
+       ],
++      thresholds: {
++        statements: 80,
++        branches: 80,
++        functions: 80,
++        lines: 80,
++      },
+     },
+     reporters: ["default", "junit"],
+     outputFile: {

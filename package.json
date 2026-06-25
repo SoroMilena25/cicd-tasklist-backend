@@ -6,12 +6,12 @@
     "dev": "tsx watch src/server.ts",
     "build": "tsc",
     "start": "node dist/server.js",
-    "test": "vitest run --config vitest.config.ts unit",
-    "test:coverage": "vitest run --config vitest.config.ts unit --coverage",
-    "test:e2e": "vitest run --config vitest.config.ts e2e",
-    "test:e2e:coverage": "vitest run --config vitest.config.ts e2e --coverage",
     "prisma:migrate": "prisma migrate dev",
-    "prisma:generate": "prisma generate"
+    "prisma:generate": "prisma generate",
+    "test": "vitest run --config vitest.config.ts unit",
+    "test:coverage": "vitest run --config vitest.config.ts unit --coverage --coverage.thresholds.lines=80 --coverage.thresholds.statements=80 --coverage.thresholds.branches=80 --coverage.thresholds.functions=80",
+    "test:e2e": "vitest run --config vitest.config.ts e2e",
+    "test:e2e:coverage": "vitest run --config vitest.config.ts e2e --coverage"
   },
   "dependencies": {
     "@prisma/client": "^6.9.0",
