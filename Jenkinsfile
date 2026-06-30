@@ -1,10 +1,6 @@
 pipeline {
     agent any
 
-    tools {
-        nodejs 'NodeJS-20'
-    }
-
     environment {
         DOCKER_CREDS = credentials('soromilena25-dockerhub-password')
         SONAR_TOKEN  = credentials('soromilena25-sonar-token')
