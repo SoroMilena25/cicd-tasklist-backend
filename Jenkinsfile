@@ -2,8 +2,8 @@ pipeline {
     agent any
 
     environment {
-        DOCKER_CREDS = credentials('milena-dockerhub-password')
-        SONAR_TOKEN  = credentials('milena-sonar-token')
+        DOCKER_CREDS = credentials('soromilena25-dockerhub-password')
+        SONAR_TOKEN  = credentials('soromilena25-sonar-token')
         IMAGE_NAME   = 'milena-tasklist-backend'
     }
 
